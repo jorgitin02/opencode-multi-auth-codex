@@ -2,6 +2,7 @@ import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import fs from 'node:fs'
 import { syncAuthFromOpenCode } from './auth-sync.js'
 import { createAuthorizationFlow, loginAccount } from './auth.js'
+import { decodeJwtPayload } from './codex-auth.js'
 import {
   extractRateLimitUpdate,
   getBlockingRateLimitResetAt,
@@ -47,18 +48,6 @@ let pluginConfig: PluginConfig = { ...DEFAULT_CONFIG }
 
 function configure(config: Partial<PluginConfig>): void {
   pluginConfig = { ...pluginConfig, ...config }
-}
-
-function decodeJWT(token: string): Record<string, any> | null {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) return null
-    const payload = parts[1]
-    const decoded = Buffer.from(payload, 'base64').toString('utf-8')
-    return JSON.parse(decoded) as Record<string, any>
-  } catch {
-    return null
-  }
 }
 
 function extractRequestUrl(input: Request | string | URL): string {
@@ -654,7 +643,7 @@ const MultiAuthPlugin: Plugin = async ({ client, $, serverUrl, project, director
             }
             triedAliases.add(account.alias)
 
-            const decoded = decodeJWT(token)
+            const decoded = decodeJwtPayload(token)
             const accountId = decoded?.[JWT_CLAIM_PATH]?.chatgpt_account_id
             if (!accountId) {
               return new Response(

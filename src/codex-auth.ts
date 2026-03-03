@@ -26,27 +26,30 @@ function getCodexAuthFilePath(): string {
   return path.join(CODEX_DIR, 'auth.json')
 }
 
-const CODEX_DIR = path.join(os.homedir(), '.codex')
-const CODEX_AUTH_FILE = getCodexAuthFilePath()
+function getCodexAuthFile(): string {
+  return getCodexAuthFilePath()
+}
 
 let lastFingerprint: string | null = null
 let lastAuthError: string | null = null
 
 export function getCodexAuthPath(): string {
-  return CODEX_AUTH_FILE
+  return getCodexAuthFile()
 }
 
 function ensureDir(): void {
-  if (!fs.existsSync(CODEX_DIR)) {
-    fs.mkdirSync(CODEX_DIR, { recursive: true, mode: 0o700 })
+  const authDir = path.dirname(getCodexAuthFile())
+  if (!fs.existsSync(authDir)) {
+    fs.mkdirSync(authDir, { recursive: true, mode: 0o700 })
   }
 }
 
 export function loadCodexAuthFile(): CodexAuthFile | null {
   lastAuthError = null
-  if (!fs.existsSync(CODEX_AUTH_FILE)) return null
+  const authFile = getCodexAuthFile()
+  if (!fs.existsSync(authFile)) return null
   try {
-    const raw = fs.readFileSync(CODEX_AUTH_FILE, 'utf-8')
+    const raw = fs.readFileSync(authFile, 'utf-8')
     return JSON.parse(raw) as CodexAuthFile
   } catch (err) {
     lastAuthError = 'Failed to parse codex auth.json'
@@ -57,7 +60,7 @@ export function loadCodexAuthFile(): CodexAuthFile | null {
 
 export function writeCodexAuthFile(auth: CodexAuthFile): void {
   ensureDir()
-  fs.writeFileSync(CODEX_AUTH_FILE, JSON.stringify(auth, null, 2), {
+  fs.writeFileSync(getCodexAuthFile(), JSON.stringify(auth, null, 2), {
     mode: 0o600
   })
 }
@@ -66,9 +69,7 @@ export function decodeJwtPayload(token: string): Record<string, any> | null {
   try {
     const parts = token.split('.')
     if (parts.length !== 3) return null
-    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
-    const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), '=')
-    const decoded = Buffer.from(padded, 'base64').toString('utf-8')
+    const decoded = Buffer.from(parts[1], 'base64url').toString('utf-8')
     return JSON.parse(decoded) as Record<string, any>
   } catch {
     return null

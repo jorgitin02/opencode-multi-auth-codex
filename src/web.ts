@@ -79,13 +79,13 @@ const HTML = `<!doctype html>
       }
       h1 {
         margin: 0;
-        font-size: 28px;
+        font-size: 30px;
         font-weight: 700;
         letter-spacing: -0.02em;
       }
       .subtitle {
         color: var(--muted);
-        font-size: 14px;
+        font-size: 15px;
       }
       .container {
         padding: 0 24px 40px;
@@ -107,17 +107,17 @@ const HTML = `<!doctype html>
       .meta-item {
         background: var(--panel-2);
         border-radius: 14px;
-        padding: 12px 14px;
+        padding: 14px 16px;
       }
       .meta-item span {
         display: block;
         color: var(--muted);
-        font-size: 12px;
+        font-size: 13px;
       }
       .meta-item strong {
         display: block;
         margin-top: 6px;
-        font-size: 16px;
+        font-size: 18px;
         word-break: break-word;
       }
       .actions {
@@ -136,10 +136,10 @@ const HTML = `<!doctype html>
         background: var(--panel-2);
         border: 1px solid rgba(255,255,255,0.08);
         border-radius: 12px;
-        padding: 12px 14px;
+        padding: 14px 16px;
         color: var(--text);
         font-family: inherit;
-        font-size: 14px;
+        font-size: 15px;
       }
       .add-row input::placeholder {
         color: var(--muted);
@@ -151,7 +151,9 @@ const HTML = `<!doctype html>
         cursor: pointer;
         border: none;
         border-radius: 10px;
-        padding: 10px 14px;
+        padding: 12px 17px;
+        min-height: 36px;
+        font-size: 14px;
         font-weight: 600;
         font-family: 'Space Grotesk', sans-serif;
         color: #0b0f14;
@@ -173,8 +175,8 @@ const HTML = `<!doctype html>
         color: #0b0f14;
       }
       button.small {
-        padding: 6px 10px;
-        font-size: 12px;
+        padding: 8px 12px;
+        font-size: 13px;
       }
       button:active { transform: translateY(1px); }
       .filters {
@@ -185,12 +187,13 @@ const HTML = `<!doctype html>
       .filters input,
       .filters select {
         width: 100%;
-        padding: 10px 12px;
+        padding: 12px 14px;
         border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.1);
         background: #141823;
         color: var(--text);
         font-family: 'Space Grotesk', sans-serif;
+        font-size: 14px;
       }
       .queue {
         display: grid;
@@ -219,7 +222,7 @@ const HTML = `<!doctype html>
       .account-card {
         background: var(--panel);
         border-radius: 16px;
-        padding: 16px;
+        padding: 18px;
         border: 1px solid rgba(255,255,255,0.06);
         display: flex;
         flex-direction: column;
@@ -232,10 +235,10 @@ const HTML = `<!doctype html>
         gap: 8px;
       }
       .badge {
-        font-size: 11px;
+        font-size: 12px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        padding: 4px 8px;
+        padding: 5px 10px;
         border-radius: 999px;
         background: rgba(55, 211, 153, 0.15);
         color: var(--success);
@@ -249,8 +252,8 @@ const HTML = `<!doctype html>
         color: var(--accent-2);
       }
       .status-badge {
-        font-size: 11px;
-        padding: 4px 8px;
+        font-size: 12px;
+        padding: 5px 10px;
         border-radius: 999px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
@@ -263,10 +266,10 @@ const HTML = `<!doctype html>
       .status-stopped { background: rgba(249, 115, 22, 0.2); color: var(--warning); }
       /* Phase C: Confidence badge styles */
       .confidence-badge {
-        font-size: 9px;
+        font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        padding: 2px 6px;
+        padding: 3px 7px;
         border-radius: 6px;
         font-weight: 700;
         margin-left: 6px;
@@ -366,7 +369,7 @@ const HTML = `<!doctype html>
       }
       .limit-card span {
         color: var(--muted);
-        font-size: 12px;
+        font-size: 13px;
       }
       .limit-card .sparkline {
         margin-top: 6px;
@@ -379,7 +382,7 @@ const HTML = `<!doctype html>
         height: 28px;
       }
       .sparkline .trend {
-        font-size: 11px;
+        font-size: 12px;
         color: var(--muted);
       }
       .tag-row {
@@ -389,14 +392,14 @@ const HTML = `<!doctype html>
         align-items: center;
       }
       .tag-chip {
-        padding: 4px 8px;
+        padding: 5px 10px;
         border-radius: 999px;
         background: rgba(255,255,255,0.08);
-        font-size: 11px;
+        font-size: 12px;
         color: var(--muted);
       }
       .notes {
-        font-size: 12px;
+        font-size: 13px;
         color: var(--muted);
         background: rgba(255,255,255,0.04);
         padding: 8px 10px;
@@ -424,7 +427,7 @@ const HTML = `<!doctype html>
         gap: 8px;
       }
       .notice {
-        font-size: 12px;
+        font-size: 13px;
         color: var(--muted);
       }
       .toast {
@@ -478,9 +481,9 @@ const HTML = `<!doctype html>
         color: var(--muted);
       }
       .ag-badge {
-        padding: 4px 8px;
+        padding: 5px 10px;
         border-radius: 999px;
-        font-size: 11px;
+        font-size: 12px;
         background: rgba(255,255,255,0.08);
         color: var(--muted);
       }
@@ -523,18 +526,18 @@ const HTML = `<!doctype html>
         gap: 8px;
       }
       .force-strategy-inline label {
-        font-size: 12px;
+        font-size: 13px;
         color: var(--muted);
       }
       .strategy-help {
-        width: 18px;
-        height: 18px;
+        width: 24px;
+        height: 24px;
         border-radius: 50%;
         border: 1px solid rgba(255,255,255,0.2);
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        font-size: 11px;
+        font-size: 12px;
         color: var(--muted);
         cursor: help;
       }
@@ -587,19 +590,19 @@ const HTML = `<!doctype html>
         background: var(--panel-2);
         border: 1px solid rgba(255,255,255,0.1);
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 10px 14px;
         color: var(--text);
         font-family: inherit;
-        font-size: 13px;
+        font-size: 14px;
       }
       #rotationStrategySelect {
         background: var(--panel-2);
         border: 1px solid rgba(255,255,255,0.1);
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 10px 14px;
         color: var(--text);
         font-family: inherit;
-        font-size: 13px;
+        font-size: 14px;
       }
       @media (max-width: 720px) {
         header { padding: 26px 18px 10px; }
@@ -1066,7 +1069,7 @@ const HTML = `<!doctype html>
               <div class="account-title">
                 <div>
                   <div style="font-size: 18px; font-weight: 600;">\${escapeHtml(acc.alias)}</div>
-                  <div style="color: var(--muted); font-size: 12px;">\${escapeHtml(acc.email || acc.accountId || 'unknown account')}</div>
+                  <div style="color: var(--muted); font-size: 13px;">\${escapeHtml(acc.email || acc.accountId || 'unknown account')}</div>
                 </div>
                 <div style="display: grid; gap: 6px; justify-items: end;">
                   <span class="\${badgeClass}">\${badge}</span>
@@ -1135,7 +1138,7 @@ const HTML = `<!doctype html>
           </div>
           <div class="meta-item">
             <span>auth.json path</span>
-            <strong style="font-size: 13px;">\${state.authPath}</strong>
+            <strong style="font-size: 14px;">\${state.authPath}</strong>
           </div>
           <div class="meta-item">
             <span>Store</span>
@@ -2515,12 +2518,32 @@ export function startWebConsole(options?: { port?: number; host?: string }): htt
 
     if (req.method === 'POST' && path === '/api/limits/refresh') {
       const body = await readJsonBody(req)
-      const accounts = listAccounts().filter((acc) => acc.idToken)
-      if (body.alias && !accounts.find((acc) => acc.alias === body.alias)) {
-        sendJson(res, 400, { error: 'Unknown alias' })
+      const allAccounts = listAccounts()
+      const probeableAccounts = allAccounts.filter((acc) => acc.idToken)
+
+      const requestedAlias = typeof body.alias === 'string' ? body.alias : undefined
+      if (requestedAlias) {
+        const requested = allAccounts.find((acc) => acc.alias === requestedAlias)
+        if (!requested) {
+          sendJson(res, 400, { error: 'Unknown alias' })
+          return
+        }
+        if (!requested.idToken) {
+          sendJson(res, 400, {
+            error: `Alias ${requestedAlias} cannot be probed because it has no idToken. Re-auth this alias via Codex flow first.`
+          })
+          return
+        }
+      }
+
+      if (probeableAccounts.length === 0) {
+        sendJson(res, 400, {
+          error: 'No probeable accounts found (all aliases are missing idToken).'
+        })
         return
       }
-      const queue = startRefreshQueue(accounts, body.alias)
+
+      const queue = startRefreshQueue(probeableAccounts, requestedAlias)
       sendJson(res, 200, { ok: true, queue })
       return
     }

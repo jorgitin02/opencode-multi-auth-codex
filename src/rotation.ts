@@ -115,8 +115,8 @@ export async function getNextAccount(
       const health = evaluateAccountHealth(forcedAccount, now)
       
       if (health.isHealthy) {
-        const token = await ensureValidToken(forcedAlias)
-        if (token) {
+        const tokenResult = await ensureValidToken(forcedAlias)
+        if (tokenResult.token) {
           store = updateAccount(forcedAlias, {
             usageCount: (forcedAccount.usageCount || 0) + 1,
             lastUsed: now,
@@ -130,7 +130,7 @@ export async function getNextAccount(
           console.log(`[multi-auth] Force mode: using ${forcedAlias}`)
           return {
             account: store.accounts[forcedAlias],
-            token,
+            token: tokenResult.token,
             forceState: {
               active: true,
               alias: forcedAlias,
@@ -138,7 +138,8 @@ export async function getNextAccount(
             }
           }
         } else {
-          console.warn(`[multi-auth] Force mode: ${forcedAlias} token unavailable; refusing fallback`)
+          const reason = tokenResult.failure?.kind || 'unknown'
+          console.warn(`[multi-auth] Force mode: ${forcedAlias} token unavailable (${reason}); refusing fallback`)
           return null
         }
       } else {
@@ -178,6 +179,14 @@ export async function getNextAccount(
   const runtimeSettings = getRuntimeSettings()
   const rotationStrategy = runtimeSettings.settings.rotationStrategy || config.rotationStrategy
 
+  const sortByHealthPriority = (input: string[]): string[] => {
+    return [...input].sort((a, b) => {
+      const healthA = healthMap.get(a)
+      const healthB = healthMap.get(b)
+      return (healthB?.priority || 0) - (healthA?.priority || 0)
+    })
+  }
+
   const buildCandidates = (): { aliases: string[]; nextIndex?: (selected: string) => number } => {
     switch (rotationStrategy) {
       case 'least-used': {
@@ -199,11 +208,7 @@ export async function getNextAccount(
         return { aliases: sorted }
       }
       case 'random': {
-        const sorted = [...availableAliases].sort((a, b) => {
-          const healthA = healthMap.get(a)
-          const healthB = healthMap.get(b)
-          return (healthB?.priority || 0) - (healthA?.priority || 0)
-        })
+        const sorted = sortByHealthPriority(availableAliases)
         const topPriority = sorted.slice(0, Math.ceil(sorted.length / 2))
         return { aliases: shuffled(topPriority.length > 0 ? topPriority : sorted) }
       }
@@ -216,11 +221,7 @@ export async function getNextAccount(
         
         if (weightedAliases.length === 0) {
           // Fallback to round-robin if no weights defined
-          const sorted = [...availableAliases].sort((a, b) => {
-            const healthA = healthMap.get(a)
-            const healthB = healthMap.get(b)
-            return (healthB?.priority || 0) - (healthA?.priority || 0)
-          })
+          const sorted = sortByHealthPriority(availableAliases)
           const start = store.rotationIndex % sorted.length
           const rr = sorted.map(
             (_, i) => sorted[(start + i) % sorted.length]
@@ -237,27 +238,24 @@ export async function getNextAccount(
         const selected = calculateWeightedSelection(weightedAliases, weights)
         if (!selected) {
           // Fallback to round-robin
-          const sorted = [...availableAliases].sort((a, b) => {
-            const healthA = healthMap.get(a)
-            const healthB = healthMap.get(b)
-            return (healthB?.priority || 0) - (healthA?.priority || 0)
-          })
+          const sorted = sortByHealthPriority(availableAliases)
           const start = store.rotationIndex % sorted.length
           const rr = sorted.map(
             (_, i) => sorted[(start + i) % sorted.length]
           )
           return { aliases: rr }
         }
-        
-        return { aliases: [selected] }
+
+        // Weighted mode still needs fallback candidates if the selected alias
+        // cannot refresh its token right now.
+        const fallbacks = sortByHealthPriority(
+          availableAliases.filter((alias) => alias !== selected)
+        )
+        return { aliases: [selected, ...fallbacks] }
       }
       case 'round-robin':
       default: {
-        const sorted = [...availableAliases].sort((a, b) => {
-          const healthA = healthMap.get(a)
-          const healthB = healthMap.get(b)
-          return (healthB?.priority || 0) - (healthA?.priority || 0)
-        })
+        const sorted = sortByHealthPriority(availableAliases)
         const start = store.rotationIndex % sorted.length
         const rr = sorted.map(
           (_, i) => sorted[(start + i) % sorted.length]
@@ -275,13 +273,27 @@ export async function getNextAccount(
   const { aliases: candidates, nextIndex } = buildCandidates()
 
   for (const candidate of candidates) {
-    const token = await ensureValidToken(candidate)
-    if (!token) {
-      store = updateAccount(candidate, {
-        rateLimitedUntil: now + tokenFailureCooldownMs,
-        limitError: '[multi-auth] Token unavailable (refresh failed?)',
-        lastLimitErrorAt: now
-      })
+    const tokenResult = await ensureValidToken(candidate)
+    if (!tokenResult.token) {
+      const permanentInvalid =
+        tokenResult.failure?.kind === 'invalid_grant' ||
+        tokenResult.failure?.kind === 'unauthorized'
+
+      if (permanentInvalid) {
+        store = updateAccount(candidate, {
+          authInvalid: true,
+          authInvalidatedAt: now,
+          rateLimitedUntil: undefined,
+          limitError: `[multi-auth] Token refresh permanently failed (${tokenResult.failure?.kind})`,
+          lastLimitErrorAt: now
+        })
+      } else {
+        store = updateAccount(candidate, {
+          rateLimitedUntil: now + tokenFailureCooldownMs,
+          limitError: `[multi-auth] Token unavailable (${tokenResult.failure?.kind || 'unknown'})`,
+          lastLimitErrorAt: now
+        })
+      }
       continue
     }
 
@@ -301,7 +313,7 @@ export async function getNextAccount(
     const currentForceState = getForceState()
     return {
       account: store.accounts[candidate],
-      token,
+      token: tokenResult.token,
       forceState: {
         active: isForceActive(),
         alias: currentForceState.forcedAlias,

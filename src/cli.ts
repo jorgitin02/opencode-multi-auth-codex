@@ -3,6 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { loginAccount } from './auth.js'
 import { removeAccount, listAccounts, getStorePath, loadStore } from './store.js'
+import { getRuntimeSettings } from './settings.js'
 import { startWebConsole } from './web.js'
 import { disableService, installService, serviceStatus } from './systemd.js'
 
@@ -66,9 +67,10 @@ async function main(): Promise<void> {
     case 'status': {
       const store = loadStore()
       const accounts = Object.values(store.accounts)
+      const { settings } = getRuntimeSettings()
 
       console.log('\n[multi-auth] Account Status\n')
-      console.log('Strategy: round-robin')
+      console.log(`Strategy: ${settings.rotationStrategy}`)
       console.log(`Accounts: ${accounts.length}`)
       console.log(`Active: ${store.activeAlias || 'none'}\n`)
 

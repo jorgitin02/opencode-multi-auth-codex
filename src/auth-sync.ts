@@ -71,10 +71,11 @@ export async function syncAuthFromOpenCode(getAuth: () => Promise<Auth>): Promis
   const derivedEmail = getEmailFromClaims(accessClaims)
   const derivedAccountId = getAccountIdFromClaims(accessClaims)
   if (existingAlias) {
+    const existingAccount = loadStore().accounts[existingAlias]
     updateAccount(existingAlias, {
       accessToken: auth.access,
       refreshToken: auth.refresh,
-      expiresAt: auth.expires,
+      expiresAt: auth.expires ?? existingAccount?.expiresAt ?? (Date.now() + 3600_000),
       email: derivedEmail,
       accountId: derivedAccountId
     })
@@ -86,10 +87,11 @@ export async function syncAuthFromOpenCode(getAuth: () => Promise<Auth>): Promis
   if (email) {
     const existingByEmail = findAccountAliasByEmail(email, store)
     if (existingByEmail) {
+      const existingAccount = store.accounts[existingByEmail]
       updateAccount(existingByEmail, {
         accessToken: auth.access,
         refreshToken: auth.refresh,
-        expiresAt: auth.expires,
+        expiresAt: auth.expires ?? existingAccount?.expiresAt ?? (Date.now() + 3600_000),
         email
       })
       return
@@ -100,7 +102,7 @@ export async function syncAuthFromOpenCode(getAuth: () => Promise<Auth>): Promis
   addAccount(alias, {
     accessToken: auth.access,
     refreshToken: auth.refresh,
-    expiresAt: auth.expires,
+    expiresAt: auth.expires ?? (Date.now() + 3600_000),
     email,
     accountId: derivedAccountId,
     source: 'opencode'

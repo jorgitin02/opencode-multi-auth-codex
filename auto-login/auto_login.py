@@ -38,8 +38,8 @@ SCOPES = ["openid", "profile", "email", "offline_access"]
 REDIRECT_PORT = 1455
 
 # Store paths (matching the plugin)
-STORE_DIR = Path.home() / ".config" / "opencode"
-STORE_FILE = STORE_DIR / "opencode-multi-auth-codex-accounts.json"
+STORE_DIR = Path.home() / ".config" / "opencode-multi-auth"
+STORE_FILE = STORE_DIR / "accounts.json"
 
 # Credentials file
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -121,7 +121,17 @@ def get_expiry_from_claims(claims):
 
 
 # ── Token exchange ──────────────────────────────────────────────────────────
-def exchange_code_for_tokens(code, redirect_uri, code_verifier):
+def get_ssl_context(no_ssl_verify=False):
+    context = ssl.create_default_context()
+    if no_ssl_verify:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def exchange_code_for_tokens(code, redirect_uri, code_verifier, ssl_context=None):
+    if ssl_context is None:
+        ssl_context = get_ssl_context()
     data = urllib.parse.urlencode(
         {
             "grant_type": "authorization_code",
@@ -138,34 +148,126 @@ def exchange_code_for_tokens(code, redirect_uri, code_verifier):
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30, context=ssl._create_unverified_context()) as resp:
+    with urllib.request.urlopen(req, timeout=30, context=ssl_context) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def fetch_userinfo_email(access_token):
+def fetch_userinfo_email(access_token, ssl_context=None):
+    if ssl_context is None:
+        ssl_context = get_ssl_context()
     try:
         req = urllib.request.Request(
             f"{OPENAI_ISSUER}/userinfo",
             headers={"Authorization": f"Bearer {access_token}"},
         )
-        with urllib.request.urlopen(req, timeout=10, context=ssl._create_unverified_context()) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=ssl_context) as resp:
             return json.loads(resp.read().decode("utf-8")).get("email")
     except Exception:
         return None
 
 
 # ── Account store (v2 format compatible with plugin) ───────────────────────
+def default_store():
+    return {
+        "version": 2,
+        "accounts": {},
+        "activeAlias": None,
+        "rotationIndex": 0,
+        "lastRotation": int(time.time() * 1000),
+    }
+
+
+def build_alias(email, existing_aliases):
+    base = email.split("@")[0] if isinstance(email, str) and email else "account"
+    candidate = base or "account"
+    suffix = 1
+    while candidate in existing_aliases:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def normalize_store(raw):
+    store = default_store()
+    if not isinstance(raw, dict):
+        return store
+
+    accounts_raw = raw.get("accounts")
+    accounts = {}
+    ordered_aliases = []
+
+    if isinstance(accounts_raw, dict):
+        for key, value in accounts_raw.items():
+            if not isinstance(value, dict):
+                continue
+            alias = (
+                value.get("alias")
+                if isinstance(value.get("alias"), str) and value.get("alias")
+                else str(key)
+            )
+            if alias in accounts:
+                alias = build_alias(value.get("email"), set(accounts.keys()))
+            entry = dict(value)
+            entry["alias"] = alias
+            entry["usageCount"] = entry.get("usageCount", 0)
+            entry["enabled"] = entry.get("enabled", True)
+            accounts[alias] = entry
+            ordered_aliases.append(alias)
+    elif isinstance(accounts_raw, list):
+        for value in accounts_raw:
+            if not isinstance(value, dict):
+                continue
+            preferred_alias = (
+                value.get("alias")
+                if isinstance(value.get("alias"), str) and value.get("alias")
+                else None
+            )
+            alias = (
+                preferred_alias
+                if preferred_alias and preferred_alias not in accounts
+                else build_alias(value.get("email"), set(accounts.keys()))
+            )
+            entry = dict(value)
+            entry["alias"] = alias
+            entry["usageCount"] = entry.get("usageCount", 0)
+            entry["enabled"] = entry.get("enabled", True)
+            accounts[alias] = entry
+            ordered_aliases.append(alias)
+
+    store["accounts"] = accounts
+
+    active_alias = raw.get("activeAlias")
+    if not (isinstance(active_alias, str) and active_alias in accounts):
+        active_index = raw.get("activeIndex")
+        if (
+            isinstance(active_index, int)
+            and active_index >= 0
+            and active_index < len(ordered_aliases)
+        ):
+            active_alias = ordered_aliases[active_index]
+        else:
+            active_alias = None
+
+    if not active_alias and ordered_aliases:
+        active_alias = ordered_aliases[0]
+
+    store["activeAlias"] = active_alias
+
+    if isinstance(raw.get("rotationIndex"), int):
+        store["rotationIndex"] = raw["rotationIndex"]
+    if isinstance(raw.get("lastRotation"), int):
+        store["lastRotation"] = raw["lastRotation"]
+    if isinstance(raw.get("version"), int):
+        store["version"] = raw["version"]
+
+    return store
+
+
 def load_store():
     if not STORE_FILE.exists():
-        return {
-            "version": 2,
-            "accounts": [],
-            "activeIndex": -1,
-            "rotationIndex": 0,
-            "lastRotation": int(time.time() * 1000),
-        }
+        return default_store()
     with open(STORE_FILE, "r") as f:
-        return json.load(f)
+        return normalize_store(json.load(f))
 
 
 def save_store(store):
@@ -179,7 +281,7 @@ def save_store(store):
     os.chmod(STORE_FILE, 0o600)
 
 
-def add_account_to_store(tokens):
+def add_account_to_store(tokens, ssl_context=None):
     now = int(time.time() * 1000)
     access_claims = decode_jwt_payload(tokens["access_token"])
     id_claims = (
@@ -194,7 +296,7 @@ def add_account_to_store(tokens):
     email = (
         get_email_from_claims(id_claims)
         or get_email_from_claims(access_claims)
-        or fetch_userinfo_email(tokens["access_token"])
+        or fetch_userinfo_email(tokens["access_token"], ssl_context=ssl_context)
     )
     account_id = get_account_id_from_claims(id_claims) or get_account_id_from_claims(
         access_claims
@@ -217,25 +319,31 @@ def add_account_to_store(tokens):
     }
 
     store = load_store()
+    existing_aliases = set(store["accounts"].keys())
+
     if email:
-        for i, acc in enumerate(store["accounts"]):
+        for alias, acc in store["accounts"].items():
             if acc.get("email") == email:
-                store["accounts"][i] = {
+                store["accounts"][alias] = {
                     **acc,
                     **new_account,
+                    "alias": alias,
                     "usageCount": acc.get("usageCount", 0),
                     "addedAt": acc.get("addedAt", now),
                     "rateLimitHistory": acc.get("rateLimitHistory", []),
                 }
+                if not store.get("activeAlias"):
+                    store["activeAlias"] = alias
                 save_store(store)
-                return email, i, False
+                return email, alias, False
 
-    store["accounts"].append(new_account)
-    idx = len(store["accounts"]) - 1
-    if store["activeIndex"] < 0:
-        store["activeIndex"] = idx
+    alias = build_alias(email, existing_aliases)
+    new_account["alias"] = alias
+    store["accounts"][alias] = new_account
+    if not store.get("activeAlias"):
+        store["activeAlias"] = alias
     save_store(store)
-    return email, idx, True
+    return email, alias, True
 
 
 # ── Credentials ─────────────────────────────────────────────────────────────
@@ -485,7 +593,13 @@ class CallbackServer(BaseHTTPRequestHandler):
 
 
 # ── Main Playwright login flow ─────────────────────────────────────────────
-def login_account(email, chatgpt_password, outlook_password=None, headless=True):
+def login_account(
+    email,
+    chatgpt_password,
+    outlook_password=None,
+    headless=True,
+    ssl_context=None,
+):
     """
     Full OAuth login. Strategy:
     1. Navigate to OpenAI auth
@@ -799,11 +913,18 @@ def login_account(email, chatgpt_password, outlook_password=None, headless=True)
 
     # ── Exchange code for tokens
     print(f"  [DONE] Exchanging code for tokens...")
-    tokens = exchange_code_for_tokens(captured_code, redirect_uri, code_verifier)
+    tokens = exchange_code_for_tokens(
+        captured_code,
+        redirect_uri,
+        code_verifier,
+        ssl_context=ssl_context,
+    )
 
-    stored_email, index, is_new = add_account_to_store(tokens)
+    stored_email, alias, is_new = add_account_to_store(
+        tokens, ssl_context=ssl_context
+    )
     action = "Added new" if is_new else "Updated existing"
-    print(f"  {action} account #{index}: {stored_email}")
+    print(f"  {action} account '{alias}': {stored_email}")
     return stored_email
 
 
@@ -819,7 +940,7 @@ def cmd_check(accounts):
         email = acc["email"]
         enabled = acc.get("enabled", True)
         store_acc = next(
-            (s for s in store["accounts"] if s.get("email") == email), None
+            (s for s in store["accounts"].values() if s.get("email") == email), None
         )
 
         if not store_acc:
@@ -837,7 +958,7 @@ def cmd_check(accounts):
     print()
 
 
-def cmd_login(targets, defaults, headless=True):
+def cmd_login(targets, defaults, headless=True, ssl_context=None):
     print(f"\n{'=' * 55}")
     print(f"  Auto-Login: {len(targets)} account(s)")
     print(f"{'=' * 55}\n")
@@ -858,7 +979,11 @@ def cmd_login(targets, defaults, headless=True):
 
         try:
             result = login_account(
-                email, chatgpt_pw, outlook_password=outlook_pw, headless=headless
+                email,
+                chatgpt_pw,
+                outlook_password=outlook_pw,
+                headless=headless,
+                ssl_context=ssl_context,
             )
             if result:
                 print(f"  -> SUCCESS\n")
@@ -889,6 +1014,11 @@ def main():
     parser.add_argument("--email", type=str, help="Login by email")
     parser.add_argument("--check", action="store_true", help="Check account status")
     parser.add_argument("--visible", action="store_true", help="Show browser window")
+    parser.add_argument(
+        "--no-ssl-verify",
+        action="store_true",
+        help="Disable TLS certificate verification (unsafe)",
+    )
     args = parser.parse_args()
 
     creds = load_credentials()
@@ -921,7 +1051,12 @@ def main():
         return
 
     headless = not args.visible
-    success, failed = cmd_login(targets, defaults, headless=headless)
+    if args.no_ssl_verify:
+        print("[WARNING] SSL verification disabled via --no-ssl-verify")
+    ssl_context = get_ssl_context(no_ssl_verify=args.no_ssl_verify)
+    success, failed = cmd_login(
+        targets, defaults, headless=headless, ssl_context=ssl_context
+    )
     sys.exit(0 if failed == 0 else 1)
 
 

@@ -29,6 +29,8 @@ interface TokenResponse {
   id_token?: string
   expires_in: number
   token_type: string
+  error?: string
+  error_description?: string
 }
 
 interface AuthorizationFlow {
@@ -37,6 +39,38 @@ interface AuthorizationFlow {
   url: string
   redirectUri: string
   port: number
+}
+
+export type TokenRefreshFailureKind =
+  | 'invalid_grant'
+  | 'unauthorized'
+  | 'transient'
+  | 'network'
+  | 'unknown'
+
+export interface TokenRefreshFailure {
+  kind: TokenRefreshFailureKind
+  status?: number
+  error?: string
+}
+
+export interface RefreshTokenDetailedResult {
+  account: AccountCredentials | null
+  failure?: TokenRefreshFailure
+}
+
+export interface EnsureValidTokenResult {
+  token: string | null
+  failure?: TokenRefreshFailure
+}
+
+const TRANSIENT_REFRESH_STATUSES = new Set([429, 500, 502, 503, 504])
+const REFRESH_RETRY_DELAYS_MS = [500, 750, 1125]
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 export async function createAuthorizationFlow(port?: number): Promise<AuthorizationFlow> {
@@ -248,13 +282,19 @@ export async function loginAccount(
   })
 }
 
-export async function refreshToken(alias: string): Promise<AccountCredentials | null> {
+async function refreshTokenAttempt(alias: string): Promise<RefreshTokenDetailedResult> {
   const store = loadStore()
   const account = store.accounts[alias]
 
   if (!account?.refreshToken) {
     console.error(`[multi-auth] No refresh token for ${alias}`)
-    return null
+    return {
+      account: null,
+      failure: {
+        kind: 'unknown',
+        error: 'No refresh token'
+      }
+    }
   }
 
   try {
@@ -269,7 +309,48 @@ export async function refreshToken(alias: string): Promise<AccountCredentials | 
     })
 
     if (!tokenRes.ok) {
-      console.error(`[multi-auth] Refresh failed for ${alias}: ${tokenRes.status}`)
+      let parsedCode = ''
+      let parsedMessage = ''
+
+      try {
+        const bodyText = await tokenRes.text()
+        if (bodyText) {
+          const parsed = JSON.parse(bodyText) as TokenResponse & { error?: { code?: string; message?: string }; message?: string }
+          parsedCode =
+            (typeof parsed.error === 'string' && parsed.error) ||
+            (typeof parsed.error?.code === 'string' && parsed.error.code) ||
+            ''
+          parsedMessage =
+            (typeof parsed.error_description === 'string' && parsed.error_description) ||
+            (typeof parsed.error?.message === 'string' && parsed.error.message) ||
+            (typeof parsed.message === 'string' && parsed.message) ||
+            ''
+        }
+      } catch {
+        // ignore parse failures, status code still drives classification
+      }
+
+      const normalizedError = `${parsedCode} ${parsedMessage}`.toLowerCase()
+      console.error(`[multi-auth] Refresh failed for ${alias}: ${tokenRes.status}${parsedCode ? ` (${parsedCode})` : ''}`)
+
+      if (tokenRes.status === 400 && normalizedError.includes('invalid_grant')) {
+        try {
+          updateAccount(alias, {
+            authInvalid: true,
+            authInvalidatedAt: Date.now()
+          })
+        } catch {
+          // ignore
+        }
+        return {
+          account: null,
+          failure: {
+            kind: 'invalid_grant',
+            status: tokenRes.status,
+            error: parsedMessage || parsedCode || 'invalid_grant'
+          }
+        }
+      }
 
       if (tokenRes.status === 401 || tokenRes.status === 403) {
         try {
@@ -280,8 +361,35 @@ export async function refreshToken(alias: string): Promise<AccountCredentials | 
         } catch {
           // ignore
         }
+        return {
+          account: null,
+          failure: {
+            kind: 'unauthorized',
+            status: tokenRes.status,
+            error: parsedMessage || 'Unauthorized refresh response'
+          }
+        }
       }
-      return null
+
+      if (TRANSIENT_REFRESH_STATUSES.has(tokenRes.status)) {
+        return {
+          account: null,
+          failure: {
+            kind: 'transient',
+            status: tokenRes.status,
+            error: parsedMessage || `Refresh returned ${tokenRes.status}`
+          }
+        }
+      }
+
+      return {
+        account: null,
+        failure: {
+          kind: 'unknown',
+          status: tokenRes.status,
+          error: parsedMessage || `Refresh returned ${tokenRes.status}`
+        }
+      }
     }
 
     const tokens = (await tokenRes.json()) as TokenResponse
@@ -304,25 +412,73 @@ export async function refreshToken(alias: string): Promise<AccountCredentials | 
     const updatedStore = updateAccount(alias, updates)
     clearAuthInvalid(alias)
 
-    return updatedStore.accounts[alias]
+    return { account: updatedStore.accounts[alias] }
   } catch (err) {
     console.error(`[multi-auth] Refresh error for ${alias}:`, err)
-    return null
+    return {
+      account: null,
+      failure: {
+        kind: 'network',
+        error: err instanceof Error ? err.message : String(err)
+      }
+    }
   }
 }
 
-export async function ensureValidToken(alias: string): Promise<string | null> {
+export async function refreshTokenDetailed(alias: string): Promise<RefreshTokenDetailedResult> {
+  for (let attempt = 0; attempt <= REFRESH_RETRY_DELAYS_MS.length; attempt += 1) {
+    const result = await refreshTokenAttempt(alias)
+    if (result.account) {
+      return result
+    }
+
+    const shouldRetry =
+      (result.failure?.kind === 'transient' || result.failure?.kind === 'network') &&
+      attempt < REFRESH_RETRY_DELAYS_MS.length
+    if (!shouldRetry) {
+      return result
+    }
+
+    await sleep(REFRESH_RETRY_DELAYS_MS[attempt])
+  }
+
+  return {
+    account: null,
+    failure: {
+      kind: 'unknown',
+      error: 'Refresh failed'
+    }
+  }
+}
+
+export async function refreshToken(alias: string): Promise<AccountCredentials | null> {
+  const result = await refreshTokenDetailed(alias)
+  return result.account
+}
+
+export async function ensureValidToken(alias: string): Promise<EnsureValidTokenResult> {
   const store = loadStore()
   const account = store.accounts[alias]
 
-  if (!account) return null
+  if (!account) {
+    return {
+      token: null,
+      failure: {
+        kind: 'unknown',
+        error: 'Account not found'
+      }
+    }
+  }
 
   const bufferMs = 5 * 60 * 1000
   if (account.expiresAt < Date.now() + bufferMs) {
     console.log(`[multi-auth] Refreshing token for ${alias}`)
-    const refreshed = await refreshToken(alias)
-    return refreshed?.accessToken || null
+    const refreshed = await refreshTokenDetailed(alias)
+    if (!refreshed.account) {
+      return { token: null, failure: refreshed.failure }
+    }
+    return { token: refreshed.account.accessToken }
   }
 
-  return account.accessToken
+  return { token: account.accessToken }
 }

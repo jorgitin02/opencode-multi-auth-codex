@@ -41,9 +41,9 @@ function getAliasHome(alias: string): string {
   return path.join(CODEX_HOME_ROOT, sanitizeAlias(alias))
 }
 
-function writeAuthJson(dir: string, account: AccountCredentials): void {
+function writeAuthJson(dir: string, account: AccountCredentials): boolean {
   if (!account.accessToken || !account.refreshToken || !account.idToken) {
-    throw new Error('Missing tokens for alias')
+    return false
   }
   const auth = {
     OPENAI_API_KEY: null,
@@ -57,6 +57,7 @@ function writeAuthJson(dir: string, account: AccountCredentials): void {
   }
   const authPath = path.join(dir, 'auth.json')
   fs.writeFileSync(authPath, JSON.stringify(auth, null, 2), { mode: 0o600 })
+  return true
 }
 
 function copyConfigToml(dir: string): void {
@@ -173,90 +174,122 @@ async function runCodexExec(
 export async function probeRateLimitsForAccount(account: AccountCredentials): Promise<ProbeResult> {
   const codexHome = getAliasHome(account.alias)
   ensureDir(codexHome)
-  writeAuthJson(codexHome, account)
-  copyConfigToml(codexHome)
-
-  const sessionsDir = path.join(codexHome, 'sessions')
-  const probeModels = getProbeModels()
-  const probeEffort = getProbeEffort()
-  let lastError = 'No token_count events found in alias sessions'
-  const attemptErrors: string[] = []
-
-  for (let idx = 0; idx < probeModels.length; idx++) {
-    const probeModel = probeModels[idx]
-    const startedAt = Date.now()
-    
-    // Phase C: Pass effort config and track duration
-    const execResult = await runCodexExec(codexHome, probeModel, probeEffort)
-    const latest = findLatestSessionRateLimits({
-      sessionsDir,
-      sinceMs: startedAt - 5_000
-    })
-
-    // Phase C: Only accept authoritative data from successful completions
-    if (execResult.ok && latest?.rateLimits) {
+  try {
+    const wroteAuth = writeAuthJson(codexHome, account)
+    if (!wroteAuth) {
       return {
-        rateLimits: latest.rateLimits,
-        eventTs: latest.eventTs,
-        sourceFile: latest.sourceFile,
-        probeModel,
-        probeEffort,
-        probeDurationMs: execResult.durationMs,
-        isAuthoritative: true
+        error: `Alias ${account.alias} missing token set for probe (requires accessToken, refreshToken, idToken)`,
+        isAuthoritative: false
       }
     }
+    copyConfigToml(codexHome)
 
-    if (execResult.error) {
-      lastError = execResult.error
-      attemptErrors.push(`[model=${probeModel}, effort=${probeEffort}] ${execResult.error}`)
-    }
+    const sessionsDir = path.join(codexHome, 'sessions')
+    const probeModels = getProbeModels()
+    const probeEffort = getProbeEffort()
+    let lastError = 'No token_count events found in alias sessions'
+    const attemptErrors: string[] = []
 
-    const hasNext = idx < probeModels.length - 1
-    if (!hasNext) break
-    
-    // Phase C: Retry with fallback on unsupported_value / reasoning.effort errors
-    if (shouldRetryWithFallback(execResult.error)) {
-      // Try with 'low' effort explicitly if current effort failed
-      if (probeEffort !== 'low' && execResult.error?.toLowerCase().includes('reasoning')) {
-        const lowEffortResult = await runCodexExec(codexHome, probeModel, 'low')
-        const lowEffortLatest = findLatestSessionRateLimits({
-          sessionsDir,
-          sinceMs: Date.now() - 5_000
-        })
-        
-        if (lowEffortResult.ok && lowEffortLatest?.rateLimits) {
-          return {
-            rateLimits: lowEffortLatest.rateLimits,
-            eventTs: lowEffortLatest.eventTs,
-            sourceFile: lowEffortLatest.sourceFile,
-            probeModel,
-            probeEffort: 'low',
-            probeDurationMs: lowEffortResult.durationMs,
-            isAuthoritative: true
+    for (let idx = 0; idx < probeModels.length; idx++) {
+      const probeModel = probeModels[idx]
+      const startedAt = Date.now()
+      
+      // Phase C: Pass effort config and track duration
+      const execResult = await runCodexExec(codexHome, probeModel, probeEffort)
+      const latest = findLatestSessionRateLimits({
+        sessionsDir,
+        sinceMs: startedAt - 5_000
+      })
+
+      // Phase C: Only accept authoritative data from successful completions
+      if (execResult.ok && latest?.rateLimits) {
+        return {
+          rateLimits: latest.rateLimits,
+          eventTs: latest.eventTs,
+          sourceFile: latest.sourceFile,
+          probeModel,
+          probeEffort,
+          probeDurationMs: execResult.durationMs,
+          isAuthoritative: true
+        }
+      }
+
+      if (execResult.error) {
+        lastError = execResult.error
+        attemptErrors.push(`[model=${probeModel}, effort=${probeEffort}] ${execResult.error}`)
+      }
+
+      const hasNext = idx < probeModels.length - 1
+      if (!hasNext) break
+      
+      // Phase C: Retry with fallback on unsupported_value / reasoning.effort errors
+      if (shouldRetryWithFallback(execResult.error)) {
+        // Try with 'low' effort explicitly if current effort failed
+        if (probeEffort !== 'low' && execResult.error?.toLowerCase().includes('reasoning')) {
+          const lowEffortResult = await runCodexExec(codexHome, probeModel, 'low')
+          const lowEffortLatest = findLatestSessionRateLimits({
+            sessionsDir,
+            sinceMs: Date.now() - 5_000
+          })
+          
+          if (lowEffortResult.ok && lowEffortLatest?.rateLimits) {
+            return {
+              rateLimits: lowEffortLatest.rateLimits,
+              eventTs: lowEffortLatest.eventTs,
+              sourceFile: lowEffortLatest.sourceFile,
+              probeModel,
+              probeEffort: 'low',
+              probeDurationMs: lowEffortResult.durationMs,
+              isAuthoritative: true
+            }
+          }
+          
+          if (lowEffortResult.error) {
+            attemptErrors.push(`[model=${probeModel}, effort=low] ${lowEffortResult.error}`)
           }
         }
-        
-        if (lowEffortResult.error) {
-          attemptErrors.push(`[model=${probeModel}, effort=low] ${lowEffortResult.error}`)
-        }
+        continue
       }
-      continue
+      
+      // Don't retry if it's not a fallback-eligible error
+      break
     }
-    
-    // Don't retry if it's not a fallback-eligible error
-    break
-  }
 
-  if (attemptErrors.length > 0) {
+    if (attemptErrors.length > 0) {
+      return { 
+        error: attemptErrors[attemptErrors.length - 1],
+        isAuthoritative: false
+      }
+    }
+
     return { 
-      error: attemptErrors[attemptErrors.length - 1],
+      error: lastError,
       isAuthoritative: false
     }
+  } finally {
+    cleanupProbeHome(account.alias)
   }
+}
 
-  return { 
-    error: lastError,
-    isAuthoritative: false
+export function cleanupProbeHome(alias: string): void {
+  const dir = getAliasHome(alias)
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
+export function cleanupAllProbeHomes(): void {
+  if (!fs.existsSync(CODEX_HOME_ROOT)) return
+  try {
+    const entries = fs.readdirSync(CODEX_HOME_ROOT)
+    for (const entry of entries) {
+      const full = path.join(CODEX_HOME_ROOT, entry)
+      fs.rmSync(full, { recursive: true, force: true })
+    }
+  } catch {
+    // ignore cleanup errors
   }
 }
 
